@@ -50,15 +50,18 @@ cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be in
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:text()
 
+function gprint(str)
+    if opt.verbose == 1 then print(str) end
+end
+
 -- parse input params
 opt = cmd:parse(arg)
-torch.manualSeed(opt.seed)
 -- train / val / test split for data, in fractions
 local test_frac = math.max(0, 1 - (opt.train_frac + opt.val_frac))
 local split_sizes = {opt.train_frac, opt.val_frac, test_frac} 
 
 -- initialize cunn/cutorch for training on the GPU and fall back to CPU gracefully
-if opt.gpuid >= 0 and opt.opencl == 0 then
+if opt.gpuid >= 0 then
     local ok, cunn = pcall(require, 'cunn')
     local ok2, cutorch = pcall(require, 'cutorch')
     if not ok then print('package cunn not found!') end
@@ -66,7 +69,6 @@ if opt.gpuid >= 0 and opt.opencl == 0 then
     if ok and ok2 then
         print('using CUDA on GPU ' .. opt.gpuid .. '...')
         cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
-        cutorch.manualSeed(opt.seed)
     else
         print('If cutorch and cunn are installed, your CUDA toolkit may be improperly configured.')
         print('Check your CUDA toolkit installation, rebuild cutorch and cunn, and try again.')
@@ -81,9 +83,6 @@ local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, o
 local vocab_size = loader.vocab_size  -- the number of distinct characters
 local vocab = loader.vocab_mapping
 print('vocab size: ' .. vocab_size)
--- make sure output directory exists
-if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
-
 
 -- load the model checkpoint
 if not lfs.attributes(opt.model, 'mode') then
@@ -105,8 +104,7 @@ current_state = {}
 for L = 1,checkpoint.opt.num_layers do
     -- c and h for all layers
     local h_init = torch.zeros(1, checkpoint.opt.rnn_size):double()
-    if opt.gpuid >= 0 and opt.opencl == 0 then h_init = h_init:cuda() end
-    if opt.gpuid >= 0 and opt.opencl == 1 then h_init = h_init:cl() end
+    if opt.gpuid >= 0 then h_init = h_init:cuda() end
     table.insert(current_state, h_init:clone())
     if checkpoint.opt.model == 'lstm' then
         table.insert(current_state, h_init:clone())
@@ -133,8 +131,7 @@ current_state = {}
 for L = 1,checkpoint.opt.num_layers do
     -- c and h for all layers
     local h_init = torch.zeros(1, checkpoint.opt.rnn_size):double()
-    if opt.gpuid >= 0 and opt.opencl == 0 then h_init = h_init:cuda() end
-    if opt.gpuid >= 0 and opt.opencl == 1 then h_init = h_init:cl() end
+    if opt.gpuid >= 0 then h_init = h_init:cuda() end
     table.insert(current_state, h_init:clone())
     if checkpoint.opt.model == 'lstm' then
         table.insert(current_state, h_init:clone())
@@ -145,12 +142,10 @@ state_size = #current_state
 
 
 -- ship the model to the GPU if desired
-if opt.gpuid >= 0 and opt.opencl == 0 then
+if opt.gpuid >= 0 then
     for k,v in pairs(protos) do v:cuda() end
 end
-if opt.gpuid >= 0 and opt.opencl == 1 then
-    for k,v in pairs(protos) do v:cl() end
-end
+
 
 -- put the above things into one flattened parameters tensor
 params, grad_params = model_utils.combine_all_parameters(protos.rnn)
@@ -168,11 +163,20 @@ for name,proto in pairs(protos) do
     clones[name] = model_utils.clone_many_times(proto, opt.seq_length, not proto.parameters)
 end
 
+init_state = {}
+for L=1,checkpoint.opt.num_layers do
+    local h_init = torch.zeros(opt.batch_size, checkpoint.opt.rnn_size)
+    if opt.gpuid >=0 then h_init = h_init:cuda() end
+    table.insert(init_state, h_init:clone())
+    if checkpoint.opt.model == 'lstm' then
+        table.insert(init_state, h_init:clone())
+    end
+end
+
 
 -- do fwd/bwd and return loss, grad_params
 local init_state_global = clone_list(init_state)
 
-assert(opt.opencl == 0)
 function load_next()
     local x, y = loader:next_batch(1)
     if opt.gpuid >= 0 then -- ship the input arrays to GPU
@@ -183,13 +187,13 @@ function load_next()
     return x
 end
 
+
 function infer(x)
         ------------------- forward pass -------------------
     local rnn_state = {[0] = init_state_global}
     local predictions = {}           -- softmax outputs
     local loss = 0
     for t=1,opt.seq_length do
-        clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)
         local lst = clones.rnn[t]:forward{x[{{}, t}], unpack(rnn_state[t-1])}
         rnn_state[t] = {}
         for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end -- extract the state, without output
@@ -200,17 +204,15 @@ function infer(x)
     -- transfer final state to initial state (BPTT)
     init_state_global = rnn_state[#rnn_state] -- NOTE: I don't think this needs to be a clone, right?
     
-    return prediction
+    return predictions
 end
 
-for i = 1,#clones.rnn do
-    clones.rnn[i]:evaluation()
-end
 
-for i = 1, iterations do
+for i = 1,100 do
    local x = load_next()
-   infer(x)
-   print(predictions)
+   local predictions = infer(x)
+   print(x)
+   --print(predictions)
 end
 
 
