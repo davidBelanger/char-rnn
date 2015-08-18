@@ -207,12 +207,17 @@ function infer(x)
 end
 
 local function findNode(module,name)
+    local node
+    local count = 0
     for i,forwardNode in ipairs(module.forwardnodes) do
         if(forwardNode.data.annotations.name == name) then
-            return forwardNode
+            node =  forwardNode
+            count = count + 1
         end
    end
-   assert(false,'could not find it')
+    assert(count == 1,'did not find it the right number of times. count = '..count)
+
+   return node
 end
 
 local function getOutput(node)
