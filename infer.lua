@@ -204,14 +204,42 @@ function infer(x)
     -- transfer final state to initial state (BPTT)
     init_state_global = rnn_state[#rnn_state] -- NOTE: I don't think this needs to be a clone, right?
     
-    return predictions
+end
+
+local function findNode(module,name)
+    for i,forwardNode in ipairs(module.forwardnodes) do
+        if(forwardNode.data.annotations.name == name) then
+            return forwardNode
+        end
+   end
+   assert(false,'could not find it')
+end
+
+local function getOutput(node)
+    return node.data.module.output
+end
+clones.forget_gates = {}
+clones.state = {}
+for i = 1,#clones.rnn do
+    table.insert(clones.forget_gates,getOutput(findNode(clones.rnn[i],'forget')))
+    table.insert(clones.state,getOutput(findNode(clones.rnn[i],'out')))
 end
 
 
-for i = 1,100 do
+for trial = 1,100 do
    local x = load_next()
-   local predictions = infer(x)
-   print(x)
+   infer(x)
+   for timestep = 1,x:size(2) do
+        local gate_output = clones.forget_gates[timestep]
+
+        for exampleIdx = 1,x:size(1) do
+            print(gate_output[exampleIdx])
+            local wordIdx = x[exampleIdx][timestep]
+            local word = ivocab[wordIdx]
+            print(word)
+        end
+    end
+    io.write('\n')
    --print(predictions)
 end
 

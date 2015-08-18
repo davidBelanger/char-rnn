@@ -34,9 +34,9 @@ function LSTM.lstm(input_size, rnn_size, n, dropout)
     local reshaped = nn.Reshape(4, rnn_size)(all_input_sums)
     local n1, n2, n3, n4 = nn.SplitTable(2)(reshaped):split(4)
     -- decode the gates
-    local in_gate = nn.Sigmoid()(n1)
-    local forget_gate = nn.Sigmoid()(n2)
-    local out_gate = nn.Sigmoid()(n3)
+    local in_gate = nn.Sigmoid()(n1):annotate{name = 'in'}
+    local forget_gate = nn.Sigmoid()(n2):annotate{name = 'forget'}
+    local out_gate = nn.Sigmoid()(n3):annotate{name = 'out'}
     -- decode the write inputs
     local in_transform = nn.Tanh()(n4)
     -- perform the LSTM update
@@ -45,7 +45,7 @@ function LSTM.lstm(input_size, rnn_size, n, dropout)
         nn.CMulTable()({in_gate,     in_transform})
       })
     -- gated cells form the output
-    local next_h = nn.CMulTable()({out_gate, nn.Tanh()(next_c)})
+    local next_h = nn.CMulTable()({out_gate, nn.Tanh()(next_c)}):annotate{name = 'next_h'}
     
     table.insert(outputs, next_c)
     table.insert(outputs, next_h)
@@ -58,7 +58,8 @@ function LSTM.lstm(input_size, rnn_size, n, dropout)
   local logsoft = nn.LogSoftMax()(proj)
   table.insert(outputs, logsoft)
 
-  return nn.gModule(inputs, outputs)
+  local module = nn.gModule(inputs, outputs)
+  return module
 end
 
 return LSTM
