@@ -230,22 +230,30 @@ for i = 1,#clones.rnn do
     table.insert(clones.state,getOutput(findNode(clones.rnn[i],'out')))
 end
 
-
+local total = 0
+local cnt = 0
 for trial = 1,100 do
    local x = load_next()
    infer(x)
+
    for timestep = 1,x:size(2) do
-        local gate_output = clones.forget_gates[timestep]
+        local gate_output = clones.forget_gates[timestep]:clone()
+        total = total + gate_output:add(-0.5):mul(2):abs():mean()
+        cnt = cnt  + 1
 
         for exampleIdx = 1,x:size(1) do
-            print(gate_output[exampleIdx])
+            --print(gate_output[exampleIdx])
             local wordIdx = x[exampleIdx][timestep]
             local word = ivocab[wordIdx]
-            print(word)
+            --print(word)
         end
     end
-    io.write('\n')
+    
+    --io.write('\n')
    --print(predictions)
 end
+
+local avg = total/cnt
+    print(avg)
 
 

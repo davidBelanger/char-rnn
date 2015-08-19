@@ -36,8 +36,8 @@ function GRU.gru(input_size, rnn_size, n, dropout)
     end
     -- GRU tick
     -- forward the update and reset gates
-    local update_gate = nn.Sigmoid()(new_input_sum(input_size_L, x, prev_h))
-    local reset_gate = nn.Sigmoid()(new_input_sum(input_size_L, x, prev_h))
+    local update_gate = nn.Sigmoid()(new_input_sum(input_size_L, x, prev_h)):annotate{name = 'update'}
+    local reset_gate = nn.Sigmoid()(new_input_sum(input_size_L, x, prev_h)):annotate{name = 'reset'}
     -- compute candidate hidden state
     local gated_hidden = nn.CMulTable()({reset_gate, prev_h})
     local p2 = nn.Linear(rnn_size, rnn_size)(gated_hidden)
@@ -46,7 +46,7 @@ function GRU.gru(input_size, rnn_size, n, dropout)
     -- compute new interpolated hidden state, based on the update gate
     local zh = nn.CMulTable()({update_gate, hidden_candidate})
     local zhm1 = nn.CMulTable()({nn.AddConstant(1,false)(nn.MulConstant(-1,false)(update_gate)), prev_h})
-    local next_h = nn.CAddTable()({zh, zhm1})
+    local next_h = nn.CAddTable()({zh, zhm1}):annotate{name = 'next_h'}
 
     table.insert(outputs, next_h)
   end
