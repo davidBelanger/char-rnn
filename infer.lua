@@ -222,10 +222,9 @@ end
 local function getOutput(node)
     return node.data.module.output
 end
-clones.forget_gates = {}
-clones.state = {}
+clones.gates = {}
 for i = 1,#clones.rnn do
-    table.insert(clones.forget_gates,getOutput(findNode(clones.rnn[i],'update')))
+    table.insert(clones.gates,getOutput(findNode(clones.rnn[i],'update')))
 --    table.insert(clones.state,getOutput(findNode(clones.rnn[i],'out')))
 end
 
@@ -241,28 +240,45 @@ local computeActivations = opt.output ~= nil
 local outfile 
 if(computeActivations) then outfile = io.open(opt.output, "w") end
 
+
+local computePeak = false
+
 for trial = 1,opt.numblocks do
    local x = load_next()
    infer(x)
 
+   local tmp_gates = {}
    for timestep = 1,x:size(2) do
-        local gate_output = clones.forget_gates[timestep]:clone()
-        total = total + gate_output:add(-0.5):mul(2):abs():mean()
-        cnt = cnt  + 1
+        table.insert(tmp_gates,clones.gates[timestep]:float())
+    end
 
-        for exampleIdx = 1,x:size(1) do
+
+    local computePeak = false
+    for exampleIdx = 1,x:size(1) do
+       for timestep = 1,x:size(2) do
+            local gate_output = tmp_gates[timestep][exampleIdx]
+            local activationStr = rowVectorStr(gate_output)
+
             local wordIdx = x[exampleIdx][timestep]
             local word = ivocab[wordIdx]
+
             if(computeActivations) then
-                local activationStr = rowVectorStr(gate_output[exampleIdx])
+                io.write(word)
                 outfile:write(string.format('%s %s\n',word,activationStr))
             end
+
+            if(computePeak) then
+                total = total + gate_output:add(-0.5):mul(2):abs():mean()
+                cnt = cnt  + 1
+            end
         end
+
     end
-    
 end
 
-local avg = total/cnt
+if(computePeak) then
+    local avg = total/cnt
     print(avg)
+end
 
 
