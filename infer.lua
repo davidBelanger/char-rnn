@@ -32,22 +32,15 @@ cmd:text()
 cmd:text('Train a character-level language model')
 cmd:text()
 cmd:text('Options')
--- data
-cmd:option('-data_dir','data/tinyshakespeare','data directory. Should contain the file input.txt with input data')
--- model params
-cmd:argument('-model','model to load')
+cmd:option('-model','model to load')
 cmd:option('-seq_length',50,'number of timesteps to unroll for')
-cmd:option('-batch_size',50,'number of sequences to train on in parallel')
-cmd:option('-max_epochs',50,'number of full passes through the training data')
-cmd:option('-grad_clip',5,'clip gradients at this value')
-cmd:option('-train_frac',0.95,'fraction of data that goes into train set')
-cmd:option('-val_frac',0.05,'fraction of data that goes into validation set')
-            -- test_frac will be computed as (1 - train_frac - val_frac)
-cmd:option('-init_from', '', 'initialize network parameters from checkpoint at this path')
--- bookkeeping
-cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
--- GPU/CPU
+cmd:option('-data_dir','','input data. default is to use what the model was trained on')
+cmd:option('-output','','where to write the inferred values. If not specified, do compute them')
+cmd:option('-batch_size',50,'number of sequences to test on in parallel')
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
+cmd:option('-byte','0','whether to use byte encoding for input data')
+cmd:option('-numblocks','100','how many blocks to process')
+
 cmd:text()
 
 function gprint(str)
@@ -56,9 +49,6 @@ end
 
 -- parse input params
 opt = cmd:parse(arg)
--- train / val / test split for data, in fractions
-local test_frac = math.max(0, 1 - (opt.train_frac + opt.val_frac))
-local split_sizes = {opt.train_frac, opt.val_frac, test_frac} 
 
 -- initialize cunn/cutorch for training on the GPU and fall back to CPU gracefully
 if opt.gpuid >= 0 then
@@ -78,11 +68,7 @@ if opt.gpuid >= 0 then
 end
 
 
--- create the data loader class
-local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes)
-local vocab_size = loader.vocab_size  -- the number of distinct characters
-local vocab = loader.vocab_mapping
-print('vocab size: ' .. vocab_size)
+
 
 -- load the model checkpoint
 if not lfs.attributes(opt.model, 'mode') then
@@ -91,6 +77,19 @@ end
 checkpoint = torch.load(opt.model)
 protos = checkpoint.protos
 protos.rnn:evaluate() -- put in eval mode so that dropout works properly
+
+-- create the data loader class
+local split_sizes = {1.0,0,0}
+local loader 
+if(opt.byte == 1) then
+    loader = CharSplitLMMinibatchLoaderByte.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes)
+else
+    loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes)
+end
+
+local vocab_size = loader.vocab_size  -- the number of distinct characters
+local vocab = loader.vocab_mapping
+print('vocab size: ' .. vocab_size)
 
 -- initialize the vocabulary (and its inverted version)
 local vocab = checkpoint.vocab
@@ -226,13 +225,23 @@ end
 clones.forget_gates = {}
 clones.state = {}
 for i = 1,#clones.rnn do
-    table.insert(clones.forget_gates,getOutput(findNode(clones.rnn[i],'forget')))
-    table.insert(clones.state,getOutput(findNode(clones.rnn[i],'out')))
+    table.insert(clones.forget_gates,getOutput(findNode(clones.rnn[i],'update')))
+--    table.insert(clones.state,getOutput(findNode(clones.rnn[i],'out')))
+end
+
+local splitter = nn.SplitTable(1,1)
+local function rowVectorStr(t)
+    return table.concat(splitter:forward(t),' ')
 end
 
 local total = 0
 local cnt = 0
-for trial = 1,100 do
+
+local computeActivations = opt.output ~= nil
+local outfile 
+if(computeActivations) then outfile = io.open(opt.output, "w") end
+
+for trial = 1,opt.numblocks do
    local x = load_next()
    infer(x)
 
@@ -242,15 +251,15 @@ for trial = 1,100 do
         cnt = cnt  + 1
 
         for exampleIdx = 1,x:size(1) do
-            --print(gate_output[exampleIdx])
             local wordIdx = x[exampleIdx][timestep]
             local word = ivocab[wordIdx]
-            --print(word)
+            if(computeActivations) then
+                local activationStr = rowVectorStr(gate_output[exampleIdx])
+                outfile:write(string.format('%s %s\n',word,activationStr))
+            end
         end
     end
     
-    --io.write('\n')
-   --print(predictions)
 end
 
 local avg = total/cnt
